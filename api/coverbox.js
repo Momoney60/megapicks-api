@@ -1,50 +1,46 @@
 // api/coverbox.js
-// Simple Vercel serverless function that proxies to your existing Apps Script JSON
 
-const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbz8x7Q-UIviJtrpF9_NYdcJnXGakCJRSX9f4FZbLxUxsfgaQBspLK0tFHh12lBGpOY/exec";
+// Your existing Google Apps Script endpoint (the one that already returns
+// the big JSON with cover, live, rows, lanes, etc.)
+const SOURCE_URL =
+  'https://script.google.com/macros/s/AKfycbz8x7Q-UIviJtrpF9_NYdcJnXGakCJRSX9f4FZbLxUxsfgaQBspLK0tFHh12lBGpOY/exec';
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
+  // ----- CORS so Squarespace can call this from the browser -----
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   try {
-    // Forward the request to your Apps Script endpoint
-    const upstreamRes = await fetch(APPS_SCRIPT_URL, {
-      // Avoid browser/proxy caching between Vercel and Apps Script
-      // (we'll control caching from Vercel instead)
-      headers: {
-        "Cache-Control": "no-cache",
-      },
+    // Fetch from your existing Apps Script endpoint
+    const upstreamRes = await fetch(SOURCE_URL, {
+      method: 'GET'
+      // no extra headers – keeps it a simple request
     });
 
-    const text = await upstreamRes.text(); // raw JSON string from Apps Script
+    if (!upstreamRes.ok) {
+      const text = await upstreamRes.text().catch(() => '');
+      throw new Error(`Upstream HTTP ${upstreamRes.status} ${text}`);
+    }
 
-    // Set caching for Vercel's edge cache:
-    // - s-maxage=15 → serve cached response for 15s
-    // - stale-while-revalidate=45 → can serve slightly stale for 45s while refreshing
-    res.setHeader(
-      "Cache-Control",
-      "public, s-maxage=15, stale-while-revalidate=45"
-    );
+    const data = await upstreamRes.json();
 
-    // Ensure the client sees this as JSON
-    res.setHeader("Content-Type", "application/json");
+    // Optional: light caching at the edge (30s) – safe for box scores
+    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=30');
 
-    // Pass through the status code from Apps Script (200, 500, etc.)
-    res.status(upstreamRes.status).send(text);
+    // Return the same JSON down to the browser
+    res.status(200).json(data);
   } catch (err) {
-    console.error("Error in /api/coverbox:", err);
-
-    res.setHeader("Content-Type", "application/json");
-    res.setHeader(
-      "Cache-Control",
-      "public, s-maxage=5, stale-while-revalidate=10"
-    );
-
-    res.status(500).send(
-      JSON.stringify({
-        ok: false,
-        error: "Vercel proxy error",
-        detail: String(err),
-      })
-    );
+    console.error('coverbox API error:', err);
+    res.status(500).json({
+      ok: false,
+      error: err.message || 'Internal error in coverbox proxy'
+    });
   }
-};
+}
