@@ -1,34 +1,46 @@
 // api/coverbox.js
-const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbz8x7Q-UIviJtrpF9_NYdcJnXGakCJRSX9f4FZbLxUxsfgaQBspLK0tFHh12lBGpOY/exec";
 
-module.exports = async (req, res) => {
+// Your existing Google Apps Script endpoint (the one that already returns
+// the big JSON with cover, live, rows, lanes, etc.)
+const SOURCE_URL =
+  'https://script.google.com/macros/s/AKfycbz8x7Q-UIviJtrpF9_NYdcJnXGakCJRSX9f4FZbLxUxsfgaQBspLK0tFHh12lBGpOY/exec';
+
+export default async function handler(req, res) {
+  // ----- CORS so Squarespace can call this from the browser -----
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   try {
-    const upstream = await fetch(APPS_SCRIPT_URL, {
-      // don’t let *browser* cache interfere – we control caching at Vercel level
-      headers: {
-        "Cache-Control": "no-cache",
-      },
+    // Fetch from your existing Apps Script endpoint
+    const upstreamRes = await fetch(SOURCE_URL, {
+      method: 'GET'
+      // no extra headers – keeps it a simple request
     });
 
-    const text = await upstream.text();
+    if (!upstreamRes.ok) {
+      const text = await upstreamRes.text().catch(() => '');
+      throw new Error(`Upstream HTTP ${upstreamRes.status} ${text}`);
+    }
 
-    res.setHeader("Content-Type", "application/json");
-    // 🔴 KEY PART: let Vercel cache this for 60s and serve stale for 120s
-    res.setHeader(
-      "Cache-Control",
-      "public, s-maxage=60, stale-while-revalidate=120"
-    );
+    const data = await upstreamRes.json();
 
-    res.status(upstream.ok ? 200 : upstream.status).send(text);
+    // Optional: light caching at the edge (30s) – safe for box scores
+    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=30');
+
+    // Return the same JSON down to the browser
+    res.status(200).json(data);
   } catch (err) {
-    res.setHeader(
-      "Cache-Control",
-      "public, s-maxage=10, stale-while-revalidate=50"
-    );
+    console.error('coverbox API error:', err);
     res.status(500).json({
       ok: false,
-      error: String(err),
+      error: err.message || 'Internal error in coverbox proxy'
     });
   }
-};
+}
